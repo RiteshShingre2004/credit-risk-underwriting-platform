@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 1 complete (SHAP explainability)
+## Status: Phase 2 complete (FastAPI backend)
 
 ## What's built so far
 
@@ -40,7 +40,8 @@ source venv/bin/activate
 python3 credit_pipeline.py
 ```
 This regenerates `scaler.joblib`, `logreg_model.joblib`, `xgb_model.joblib`,
-and `test_predictions.csv`.
+`logreg_calibrated.joblib`, `xgb_calibrated.joblib`, `test_predictions.csv`,
+and `metrics.json`.
 
 ## Setup
 
@@ -86,8 +87,36 @@ which made SHAP wrongly refuse to run (`NotImplementedError: Categorical
 split is not yet supported`). Fixed by passing `enable_categorical=False`
 explicitly in both `XGBClassifier(...)` calls in `credit_pipeline.py`.
 
+### Phase 2 — FastAPI backend (`api.py`)
+Wraps the calibrated models in a small HTTP API so other programs (a
+dashboard, a script, curl) can request a score without touching Python
+or the model files directly.
+
+Request/response validation uses **Pydantic**: `ApplicantFeatures`
+describes a valid request (24 numeric fields, `X1`-`X24`). FastAPI checks
+every incoming request against it automatically — a missing field or a
+wrong type gets rejected with a `422` error before our code runs, no
+manual `if` checks needed.
+
+Endpoints:
+- `POST /score` — calibrated Probability of Default from both LR and
+  XGBoost. LR's input is scaled first (`scaler.joblib`, same as
+  training); XGBoost takes raw features.
+- `POST /explain` — same request shape, returns the Phase 1 SHAP
+  explanation (reuses `explain_applicant()` directly, no duplicated logic).
+- `GET /metrics` — returns `metrics.json` (AUC/Gini/KS for all four
+  model variants, computed once during training).
+- `GET /` — health check.
+
+Run it with:
+```bash
+source venv/bin/activate
+uvicorn api:app --reload
+```
+Then open `http://127.0.0.1:8000/docs` for interactive, auto-generated
+API docs you can test requests against in the browser.
+
 ## What's next
-- Phase 2: FastAPI backend (`/score`, `/explain`, `/metrics`)
 - Phase 3: Streamlit dashboard
 - Phase 4: Persistence + audit trail (SQLite/Postgres)
 - Phase 5: Docker
