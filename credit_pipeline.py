@@ -234,6 +234,13 @@ for key, probs in [
 metrics["test_set_size"] = len(y_test)
 metrics["test_set_default_rate"] = round(float(y_test.mean()), 4)
 
+# A version tag for the saved model files and calibration method, so the
+# audit trail (Phase 4) can record exactly which model produced a given
+# decision. Bump MODEL_VERSION by hand whenever you retrain with a
+# meaningfully different pipeline (new features, different hyperparameters).
+metrics["model_version"] = "1.0.0"
+metrics["calibration_method"] = "platt_sigmoid"
+
 with open("metrics.json", "w") as f:
     json.dump(metrics, f, indent=2)
 

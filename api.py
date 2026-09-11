@@ -27,9 +27,32 @@ import pandas as pd
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+import database
 from explainability import explain_applicant
 
 FEATURE_NAMES = [f"X{i}" for i in range(1, 25)]
+
+# -----------------------------------------------------------------
+# DECISION POLICY (the "deterministic policy engine")
+# -----------------------------------------------------------------
+# This is the one, single-source-of-truth definition of how a
+# probability turns into a decision. The dashboard used to have its own
+# copy of thresholds -- now it just displays whatever the API decides,
+# so two people looking at the same applicant always see the same
+# answer, and every decision is reproducible from the logged policy
+# values alone.
+DECISION_MODEL = "xgb_calibrated"  # which model's PD drives the decision
+POLICY_APPROVE_BELOW = 0.20
+POLICY_REJECT_ABOVE = 0.50
+
+
+def apply_policy(pd_value: float) -> str:
+    if pd_value < POLICY_APPROVE_BELOW:
+        return "APPROVE"
+    if pd_value > POLICY_REJECT_ABOVE:
+        return "REJECT"
+    return "REVIEW"
+
 
 # -----------------------------------------------------------------
 # LOAD EVERYTHING ONCE, AT STARTUP
@@ -42,6 +65,8 @@ xgb_calibrated = joblib.load("xgb_calibrated.joblib")
 
 with open("metrics.json") as f:
     METRICS = json.load(f)
+
+database.init_db()
 
 app = FastAPI(
     title="Credit Risk Scoring API",
@@ -135,3 +160,60 @@ def metrics():
     """Return AUC / Gini / KS for all model variants on the held-out
     test set, computed once during training (see metrics.json)."""
     return METRICS
+
+
+@app.post("/decide")
+def decide(applicant: ApplicantFeatures):
+    """
+    The audited decision path: score both models, apply the fixed
+    policy thresholds to get a tier, explain the decision with SHAP,
+    and permanently log all of it to SQLite. This is what a real
+    underwriting decision -- as opposed to a what-if score -- should
+    go through.
+    """
+    features = applicant.model_dump()
+    row = _to_row(applicant)
+
+    row_scaled = scaler.transform(row)
+    lr_pd = float(logreg_calibrated.predict_proba(row_scaled)[0, 1])
+    xgb_pd = float(xgb_calibrated.predict_proba(row)[0, 1])
+
+    pds = {
+        "logreg_probability_of_default": lr_pd,
+        "xgb_probability_of_default": xgb_pd,
+    }
+    decision_pd = pds["xgb_probability_of_default"] if DECISION_MODEL == "xgb_calibrated" else pds["logreg_probability_of_default"]
+    tier = apply_policy(decision_pd)
+
+    explanation = explain_applicant(features)
+
+    log_id = database.log_decision(
+        features=features,
+        logreg_pd=lr_pd,
+        xgb_pd=xgb_pd,
+        model_version=METRICS["model_version"],
+        calibration_method=METRICS["calibration_method"],
+        decision_model=DECISION_MODEL,
+        decision_tier=tier,
+        policy_approve_below=POLICY_APPROVE_BELOW,
+        policy_reject_above=POLICY_REJECT_ABOVE,
+        shap_top_features=explanation["top_features"],
+    )
+
+    return {
+        "log_id": log_id,
+        "logreg_probability_of_default": round(lr_pd, 4),
+        "xgb_probability_of_default": round(xgb_pd, 4),
+        "decision_model": DECISION_MODEL,
+        "decision_tier": tier,
+        "policy_approve_below": POLICY_APPROVE_BELOW,
+        "policy_reject_above": POLICY_REJECT_ABOVE,
+        "explanation": explanation,
+    }
+
+
+@app.get("/decisions")
+def decisions(limit: int = 50):
+    """Return the most recently logged decisions, newest first --
+    the audit trail."""
+    return database.get_recent_decisions(limit=limit)

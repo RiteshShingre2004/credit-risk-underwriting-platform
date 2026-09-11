@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 3 complete (Streamlit dashboard)
+## Status: Phase 4 complete (persistence + audit trail)
 
 ## What's built so far
 
@@ -117,18 +117,18 @@ Then open `http://127.0.0.1:8000/docs` for interactive, auto-generated
 API docs you can test requests against in the browser.
 
 ### Phase 3 — Streamlit dashboard (`dashboard.py`)
-A UI on top of the API — it holds no models itself, every number comes
-from HTTP calls to `api.py`. Two tabs:
+A UI on top of the API — it holds no models itself and decides nothing
+itself either, every number and every decision tier comes from HTTP
+calls to `api.py` (see Phase 4 below for how the decision policy works).
+Three tabs:
 - **Score an Applicant** — pick a test-set applicant (auto-fills all 24
-  features, editable) or type your own, hit "Score", and see:
-  - Calibrated PD from both models.
-  - A decision tier (APPROVE / REVIEW / REJECT) driven by sidebar
-    thresholds — the thresholds are a policy choice you can drag around,
-    not something the model outputs.
-  - The SHAP explanation as a colored bar chart (red = increases risk,
-    green = decreases risk) plus the plain-English sentences from Phase 1.
+  features, editable) or type your own, hit "Score", and see calibrated
+  PD from both models, the APPROVE/REVIEW/REJECT decision, and the SHAP
+  explanation as a colored bar chart (red = increases risk, green =
+  decreases risk) plus the plain-English sentences from Phase 1.
 - **Model Performance** — a grouped bar chart + table of AUC/Gini/KS for
   all four model variants, from `/metrics`.
+- **Audit Trail** — every logged decision, from `/decisions` (Phase 4).
 
 Run both pieces (two terminals):
 ```bash
@@ -149,8 +149,41 @@ above it (12.1%) — because SHAP explains the *raw* XGBoost model and
 `/score` returns the *calibrated* one. Fixed by adding an explicit note
 in the UI rather than hiding the (legitimate) discrepancy.
 
+### Phase 4 — Persistence + audit trail (`database.py`, `api.py`'s `/decide`)
+Every real underwriting decision now gets permanently logged to SQLite
+(`credit_risk.db`, gitignored — it's runtime data, not source).
+
+**The decision policy moved server-side.** Previously the dashboard had
+its own APPROVE/REJECT threshold sliders; now `api.py` is the single
+source of truth (`DECISION_MODEL`, `POLICY_APPROVE_BELOW`,
+`POLICY_REJECT_ABOVE`), so the decision is consistent and reproducible
+regardless of who's looking at it. This is also, deliberately, the
+"deterministic policy engine" pattern the LLM phase (Phase 7) will need
+to plug into later.
+
+**`POST /decide`** — the audited decision path: scores both models,
+applies the policy to get a tier, generates the SHAP explanation, logs
+one row, and returns everything (including the new log's id).
+`/score` and `/explain` are unchanged and stay non-logged, for quick
+testing. **`GET /decisions`** returns the most recent logged decisions.
+
+**`scoring_log` table** — one row per decision: `id`, `created_at`,
+`X1`-`X24` (as individual queryable columns, not a JSON blob),
+`logreg_pd`, `xgb_pd`, `model_version`, `calibration_method`,
+`decision_model`, `decision_tier`, `policy_approve_below`,
+`policy_reject_above`, `shap_top_features` (JSON — this one's naturally
+a small nested list).
+
+The dashboard's "Score an Applicant" tab now calls `/decide` instead of
+separately calling `/score` + `/explain`, and a new **Audit Trail** tab
+lists logged decisions from `/decisions`, with a detail view per entry.
+
+Verified with curl (checked `/decide` writes a row, `/decisions` returns
+it) and independently with the `sqlite3` CLI directly against the
+database file, plus Playwright driving the dashboard end-to-end.
+
 ## What's next
-- Phase 4: Persistence + audit trail (SQLite/Postgres)
+- Phase 5: Docker
 - Phase 5: Docker
 - Phase 6: Drift monitoring (PSI/CSI)
 - Phase 7: LLM/RAG policy assistant (design discussion required before

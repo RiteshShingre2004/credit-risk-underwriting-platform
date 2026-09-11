@@ -1,13 +1,16 @@
 """
-CREDIT RISK PIPELINE - PHASE 3: STREAMLIT DASHBOARD
+CREDIT RISK PIPELINE - PHASE 3+4: STREAMLIT DASHBOARD
 ========================================================
 Goal: a simple UI to score an applicant and see WHY, without needing to
 hand-craft curl commands against the FastAPI backend.
 
-This app is just a client: it doesn't load any models itself. Every
-number on screen comes from calling api.py's /score, /explain, and
-/metrics endpoints over HTTP (the same way a browser talks to a
-website). Run the API first, then this dashboard, in two terminals:
+This app is just a client: it doesn't load any models itself, and it
+doesn't decide anything itself either. Every number and every
+APPROVE/REVIEW/REJECT tier on screen comes from calling api.py's
+/decide endpoint over HTTP -- the API is the single source of truth
+for the decision policy, and every call to /decide is permanently
+logged to the audit trail (see database.py). Run the API first, then
+this dashboard, in two terminals:
 
     # terminal 1
     source venv/bin/activate && uvicorn api:app --reload
@@ -22,40 +25,23 @@ import requests
 import streamlit as st
 
 FEATURE_NAMES = [f"X{i}" for i in range(1, 25)]
+TIER_COLORS = {"APPROVE": "green", "REVIEW": "orange", "REJECT": "red"}
 
 st.set_page_config(page_title="Credit Risk Dashboard", layout="wide")
 st.title("Credit Risk & Underwriting Dashboard")
 
 
 # -----------------------------------------------------------------
-# SIDEBAR: API CONNECTION + DECISION POLICY
+# SIDEBAR
 # -----------------------------------------------------------------
 st.sidebar.header("Settings")
 api_url = st.sidebar.text_input("FastAPI base URL", value="http://127.0.0.1:8000")
-
-st.sidebar.subheader("Decision policy")
 st.sidebar.caption(
-    "These thresholds turn a Probability of Default into a decision. "
-    "They're a policy choice, not something the model decides."
+    "The decision policy (which model drives the decision, and the "
+    "APPROVE/REJECT thresholds) is enforced server-side by /decide, "
+    "not configurable here -- that's what makes every decision "
+    "reproducible from the audit trail alone."
 )
-decision_model = st.sidebar.selectbox(
-    "Decision driven by",
-    ["xgb_probability_of_default", "logreg_probability_of_default"],
-    format_func=lambda x: "XGBoost (calibrated)" if "xgb" in x else "Logistic Regression (calibrated)",
-)
-approve_below = st.sidebar.slider("APPROVE if PD below", 0.0, 1.0, 0.20, 0.01)
-reject_above = st.sidebar.slider("REJECT if PD above", 0.0, 1.0, 0.50, 0.01)
-if approve_below > reject_above:
-    st.sidebar.error("APPROVE threshold must be below REJECT threshold.")
-
-
-def decide(pd_value: float) -> tuple[str, str]:
-    """Map a PD to (tier, color) using the sidebar thresholds."""
-    if pd_value < approve_below:
-        return "APPROVE", "green"
-    if pd_value > reject_above:
-        return "REJECT", "red"
-    return "REVIEW", "orange"
 
 
 # -----------------------------------------------------------------
@@ -69,7 +55,9 @@ def load_test_applicants():
 
 test_df = load_test_applicants()
 
-tab_score, tab_metrics = st.tabs(["Score an Applicant", "Model Performance"])
+tab_score, tab_metrics, tab_audit = st.tabs(
+    ["Score an Applicant", "Model Performance", "Audit Trail"]
+)
 
 # -----------------------------------------------------------------
 # TAB 1: SCORE AN APPLICANT
@@ -100,13 +88,12 @@ with tab_score:
                 )
 
     st.subheader("2. Score")
+    st.caption("This calls /decide, which also permanently logs the decision (see the Audit Trail tab).")
     if st.button("Score this applicant", type="primary"):
         payload = feature_values
         try:
-            score_resp = requests.post(f"{api_url}/score", json=payload, timeout=10)
-            explain_resp = requests.post(f"{api_url}/explain", json=payload, timeout=10)
-            score_resp.raise_for_status()
-            explain_resp.raise_for_status()
+            resp = requests.post(f"{api_url}/decide", json=payload, timeout=10)
+            resp.raise_for_status()
         except requests.exceptions.ConnectionError:
             st.error(
                 "Could not reach the API. Is it running? Start it with:\n\n"
@@ -115,22 +102,27 @@ with tab_score:
         except requests.exceptions.HTTPError as e:
             st.error(f"API returned an error: {e}")
         else:
-            scores = score_resp.json()
-            explanation = explain_resp.json()
-
-            decision_pd = scores[decision_model]
-            tier, color = decide(decision_pd)
+            result = resp.json()
+            explanation = result["explanation"]
+            tier = result["decision_tier"]
+            color = TIER_COLORS[tier]
 
             st.markdown("### Result")
             m1, m2, m3 = st.columns(3)
-            m1.metric("Logistic Regression PD", f"{scores['logreg_probability_of_default']:.1%}")
-            m2.metric("XGBoost PD", f"{scores['xgb_probability_of_default']:.1%}")
+            m1.metric("Logistic Regression PD", f"{result['logreg_probability_of_default']:.1%}")
+            m2.metric("XGBoost PD", f"{result['xgb_probability_of_default']:.1%}")
             m3.markdown(
                 f"<div style='text-align:center'>"
                 f"<span style='font-size:0.9rem;color:gray'>Decision</span><br>"
                 f"<span style='font-size:1.8rem;font-weight:700;color:{color}'>{tier}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
+            )
+            st.caption(
+                f"Policy: APPROVE if {result['decision_model']} PD is below "
+                f"{result['policy_approve_below']:.0%}, REJECT if above "
+                f"{result['policy_reject_above']:.0%}, else REVIEW. "
+                f"Logged as audit entry #{result['log_id']}."
             )
 
             st.markdown("### Why (SHAP explanation, XGBoost model)")
@@ -140,7 +132,7 @@ with tab_score:
                 f"probability from the **raw, pre-calibration** XGBoost model: "
                 f"{explanation['predicted_probability']:.1%} — SHAP explains this "
                 f"raw model's tree structure, so this number won't exactly match "
-                f"the **calibrated** XGBoost PD ({scores['xgb_probability_of_default']:.1%}) "
+                f"the **calibrated** XGBoost PD ({result['xgb_probability_of_default']:.1%}) "
                 f"shown above, which is what actually drives the decision. "
                 f"Calibration rescales the probability to match real-world default "
                 f"frequency; it doesn't change which features matter or in which "
@@ -218,3 +210,39 @@ with tab_metrics:
             f"Test set: {metrics['test_set_size']} applicants, "
             f"{metrics['test_set_default_rate']:.1%} actual default rate."
         )
+
+# -----------------------------------------------------------------
+# TAB 3: AUDIT TRAIL
+# -----------------------------------------------------------------
+with tab_audit:
+    st.subheader("Every decision, permanently logged")
+    st.caption(
+        "Each row is one call to /decide, stored in credit_risk.db. This "
+        "is what a compliance review or a later model-monitoring check "
+        "would query."
+    )
+    limit = st.number_input("Show most recent N decisions", min_value=1, max_value=500, value=25)
+    if st.button("Refresh"):
+        st.cache_data.clear()
+
+    try:
+        decisions = requests.get(f"{api_url}/decisions", params={"limit": limit}, timeout=10).json()
+    except requests.exceptions.ConnectionError:
+        st.error(
+            "Could not reach the API. Is it running? Start it with:\n\n"
+            "`uvicorn api:app --reload`"
+        )
+    else:
+        if not decisions:
+            st.info("No decisions logged yet -- score an applicant in the first tab.")
+        else:
+            audit_df = pd.DataFrame(decisions)
+            display_cols = [
+                "id", "created_at", "decision_tier", "decision_model",
+                "logreg_pd", "xgb_pd", "model_version",
+            ]
+            st.dataframe(audit_df[display_cols], width="stretch")
+
+            with st.expander("Full detail for one entry"):
+                selected_id = st.selectbox("Entry id", audit_df["id"].tolist())
+                st.json(audit_df[audit_df["id"] == selected_id].iloc[0].to_dict())
