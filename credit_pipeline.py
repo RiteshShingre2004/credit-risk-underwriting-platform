@@ -195,10 +195,18 @@ for name, probs in [
 # -----------------------------------------------------------------
 # STEP 7: SAVE RESULTS FOR THE NEXT STAGE (SHAP + API)
 # -----------------------------------------------------------------
+# We save BOTH the raw models (SHAP explains these -- calibration doesn't
+# change the tree structure, just rescales the output) AND the calibrated
+# models (the API serves PDs from these, since a calibrated probability
+# is the one that should actually be trusted as "real-world % chance").
+import json
 import joblib
+
 joblib.dump(scaler, "scaler.joblib")
 joblib.dump(log_reg, "logreg_model.joblib")
 joblib.dump(xgb, "xgb_model.joblib")
+joblib.dump(lr_calibrated, "logreg_calibrated.joblib")
+joblib.dump(xgb_calibrated, "xgb_calibrated.joblib")
 
 results_df = X_test.copy()
 results_df["actual_default"] = y_test.values
@@ -206,7 +214,32 @@ results_df["lr_prob_calibrated"] = lr_probs_cal
 results_df["xgb_prob_calibrated"] = xgb_probs_cal
 results_df.to_csv("test_predictions.csv", index=False)
 
+# The FastAPI /metrics endpoint (Phase 2) reads this instead of
+# retraining/re-evaluating every time the server starts.
+metrics = {}
+for key, probs in [
+    ("logreg_raw", lr_probs_raw),
+    ("logreg_calibrated", lr_probs_cal),
+    ("xgb_raw", xgb_probs_raw),
+    ("xgb_calibrated", xgb_probs_cal),
+]:
+    gini, auc = gini_coefficient(y_test, probs)
+    ks, best_thresh = ks_statistic(y_test, probs)
+    metrics[key] = {
+        "auc": round(float(auc), 4),
+        "gini": round(float(gini), 4),
+        "ks": round(float(ks), 4),
+        "ks_best_threshold": round(float(best_thresh), 4),
+    }
+metrics["test_set_size"] = len(y_test)
+metrics["test_set_default_rate"] = round(float(y_test.mean()), 4)
+
+with open("metrics.json", "w") as f:
+    json.dump(metrics, f, indent=2)
+
 print("\n" + "=" * 60)
 print("STEP 7: ARTIFACTS SAVED")
 print("=" * 60)
-print("Saved: scaler.joblib, logreg_model.joblib, xgb_model.joblib, test_predictions.csv")
+print("Saved: scaler.joblib, logreg_model.joblib, xgb_model.joblib,")
+print("       logreg_calibrated.joblib, xgb_calibrated.joblib,")
+print("       test_predictions.csv, metrics.json")

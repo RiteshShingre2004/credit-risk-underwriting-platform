@@ -1,0 +1,28 @@
+{
+  "logreg_raw": {
+    "auc": 0.8017,
+    "gini": 0.6035,
+    "ks": 0.5143,
+    "ks_best_threshold": 0.4138
+  },
+  "logreg_calibrated": {
+    "auc": 0.8019,
+    "gini": 0.6038,
+    "ks": 0.519,
+    "ks_best_threshold": 0.3915
+  },
+  "xgb_raw": {
+    "auc": 0.8022,
+    "gini": 0.6044,
+    "ks": 0.4683,
+    "ks_best_threshold": 0.2487
+  },
+  "xgb_calibrated": {
+    "auc": 0.8099,
+    "gini": 0.6198,
+    "ks": 0.5016,
+    "ks_best_threshold": 0.2725
+  },
+  "test_set_size": 300,
+  "test_set_default_rate": 0.3
+}

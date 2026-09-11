@@ -75,10 +75,10 @@ source venv/bin/activate
 python3 explainability.py
 ```
 
-**Note:** only the *raw* (uncalibrated) XGBoost model is currently
-persisted to disk — SHAP explains the tree structure, which calibration
-doesn't change, so this is fine for explainability. The calibrated model
-will need to be persisted separately for Phase 2's `/score` endpoint.
+**Note:** SHAP explains the *raw* (uncalibrated) XGBoost model — that's
+fine since calibration only rescales the output, it doesn't change the
+tree structure. `logreg_calibrated.joblib` and `xgb_calibrated.joblib`
+(saved by `credit_pipeline.py`) are what Phase 2's `/score` endpoint uses.
 
 **macOS/XGBoost quirk fixed here:** newer XGBoost versions default
 `enable_categorical=True` internally even when no feature is categorical,
