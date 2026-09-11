@@ -94,6 +94,10 @@ xgb = XGBClassifier(
     learning_rate=0.05,
     eval_metric="logloss",
     random_state=42,
+    enable_categorical=False,  # our features are all plain numeric; being
+    # explicit here avoids a version quirk where XGBoost's default flips
+    # this on, which then confuses SHAP into thinking there are
+    # categorical splits to worry about.
 )
 xgb.fit(X_train, y_train)  # XGBoost does not need scaling
 xgb_probs_raw = xgb.predict_proba(X_test)[:, 1]
@@ -123,7 +127,8 @@ lr_probs_cal = lr_calibrated.predict_proba(X_test_scaled)[:, 1]
 
 xgb_calibrated = CalibratedClassifierCV(
     XGBClassifier(n_estimators=200, max_depth=3, learning_rate=0.05,
-                  eval_metric="logloss", random_state=42),
+                  eval_metric="logloss", random_state=42,
+                  enable_categorical=False),
     method="sigmoid", cv=5
 )
 xgb_calibrated.fit(X_train, y_train)

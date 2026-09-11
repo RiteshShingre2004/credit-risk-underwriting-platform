@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 1 in progress (SHAP explainability)
+## Status: Phase 1 complete (SHAP explainability)
 
 ## What's built so far
 
@@ -47,14 +47,46 @@ and `test_predictions.csv`.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install pandas numpy scikit-learn xgboost shap joblib
+pip install -r requirements.txt
 ```
 
 **macOS note:** XGBoost needs the OpenMP runtime, which isn't part of macOS.
 If you see a `libomp.dylib` load error, run `brew install libomp`.
 
+### Phase 1 — SHAP explainability (`explainability.py`)
+Explains individual XGBoost predictions and overall feature importance
+using [SHAP](https://shap.readthedocs.io/) (`TreeExplainer`, interventional
+perturbation, probability-space output — so a SHAP value of `0.15` means
+"+15 percentage points of predicted default risk," not an abstract score).
+
+Two functions, importable independently of training:
+- `explain_applicant(row)` — takes a test-set row index (or a dict/Series
+  of raw feature values for a new applicant) and returns the predicted
+  probability plus the top features pushing it up or down, e.g.
+  `"X2 (value=48) increased predicted default risk by 0.055"`.
+- `plot_global_importance()` — saves `shap_global_importance.png`, a bar
+  chart of each feature's average impact across all 300 test applicants.
+  `X1` (checking-account status) dominates, which matches the German
+  Credit dataset's well-known top predictor.
+
+Run the demo with:
+```bash
+source venv/bin/activate
+python3 explainability.py
+```
+
+**Note:** only the *raw* (uncalibrated) XGBoost model is currently
+persisted to disk — SHAP explains the tree structure, which calibration
+doesn't change, so this is fine for explainability. The calibrated model
+will need to be persisted separately for Phase 2's `/score` endpoint.
+
+**macOS/XGBoost quirk fixed here:** newer XGBoost versions default
+`enable_categorical=True` internally even when no feature is categorical,
+which made SHAP wrongly refuse to run (`NotImplementedError: Categorical
+split is not yet supported`). Fixed by passing `enable_categorical=False`
+explicitly in both `XGBClassifier(...)` calls in `credit_pipeline.py`.
+
 ## What's next
-- Phase 1: SHAP explainability (`explainability.py`) — in progress
 - Phase 2: FastAPI backend (`/score`, `/explain`, `/metrics`)
 - Phase 3: Streamlit dashboard
 - Phase 4: Persistence + audit trail (SQLite/Postgres)
