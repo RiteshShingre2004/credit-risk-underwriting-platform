@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 2 complete (FastAPI backend)
+## Status: Phase 3 complete (Streamlit dashboard)
 
 ## What's built so far
 
@@ -116,8 +116,40 @@ uvicorn api:app --reload
 Then open `http://127.0.0.1:8000/docs` for interactive, auto-generated
 API docs you can test requests against in the browser.
 
+### Phase 3 — Streamlit dashboard (`dashboard.py`)
+A UI on top of the API — it holds no models itself, every number comes
+from HTTP calls to `api.py`. Two tabs:
+- **Score an Applicant** — pick a test-set applicant (auto-fills all 24
+  features, editable) or type your own, hit "Score", and see:
+  - Calibrated PD from both models.
+  - A decision tier (APPROVE / REVIEW / REJECT) driven by sidebar
+    thresholds — the thresholds are a policy choice you can drag around,
+    not something the model outputs.
+  - The SHAP explanation as a colored bar chart (red = increases risk,
+    green = decreases risk) plus the plain-English sentences from Phase 1.
+- **Model Performance** — a grouped bar chart + table of AUC/Gini/KS for
+  all four model variants, from `/metrics`.
+
+Run both pieces (two terminals):
+```bash
+# terminal 1
+source venv/bin/activate && uvicorn api:app --reload
+
+# terminal 2
+source venv/bin/activate && streamlit run dashboard.py
+```
+Then open `http://localhost:8501`.
+
+**Tested with:** Playwright driving a real headless Chrome against the
+running app — picked an applicant, clicked "Score", confirmed the PD
+values, decision tier, and SHAP chart all rendered correctly, and
+checked the "Model Performance" tab. One real bug caught this way: the
+SHAP section showed a different probability (2.7%) than the score card
+above it (12.1%) — because SHAP explains the *raw* XGBoost model and
+`/score` returns the *calibrated* one. Fixed by adding an explicit note
+in the UI rather than hiding the (legitimate) discrepancy.
+
 ## What's next
-- Phase 3: Streamlit dashboard
 - Phase 4: Persistence + audit trail (SQLite/Postgres)
 - Phase 5: Docker
 - Phase 6: Drift monitoring (PSI/CSI)
