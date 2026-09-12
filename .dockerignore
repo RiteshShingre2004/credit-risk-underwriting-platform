@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.DS_Store
+credit_risk.db
+shap_global_importance.png

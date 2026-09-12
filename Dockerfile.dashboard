@@ -1,0 +1,32 @@
+# CREDIT RISK PIPELINE - PHASE 5: DOCKERFILE FOR THE STREAMLIT SERVICE
+# ======================================================================
+# See Dockerfile.api for a line-by-line explanation of the general
+# pattern (base image, working dir, cached dependency install, etc.).
+# This one is simpler: the dashboard never loads a model or touches
+# XGBoost/SHAP directly, it only makes HTTP calls to the API -- so it
+# doesn't need the libgomp1 (OpenMP) system package.
+
+FROM python:3.14-slim
+
+WORKDIR /app
+
+# Reuses the project's single requirements.txt for simplicity, even
+# though the dashboard only actually needs streamlit/requests/plotly/
+# pandas. That means this image installs some packages (fastapi,
+# xgboost, shap...) it never imports -- a bit wasteful on image size,
+# but keeps the project to one requirements file instead of two to
+# keep in sync. Worth splitting into requirements-api.txt /
+# requirements-dashboard.txt later if image size ever actually matters.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# The dashboard only needs its own code and the test set it lets you
+# pick applicants from -- not the trained models or training data.
+COPY dashboard.py test_predictions.csv ./
+
+EXPOSE 8501
+
+# --server.address=0.0.0.0 is Streamlit's equivalent of uvicorn's
+# --host 0.0.0.0 above: without it, Streamlit only listens for
+# connections from inside its own container.
+CMD ["streamlit", "run", "dashboard.py", "--server.address=0.0.0.0", "--server.port=8501"]

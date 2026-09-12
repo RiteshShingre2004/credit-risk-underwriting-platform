@@ -1,0 +1,48 @@
+# CREDIT RISK PIPELINE - PHASE 5: DOCKERFILE FOR THE FASTAPI SERVICE
+# ======================================================================
+# A Dockerfile is a recipe for building a self-contained image: a
+# snapshot of an operating system, Python, our dependencies, and our
+# code, all bundled together so it runs identically on any machine --
+# no "works on my laptop" surprises.
+
+# Start from an official, minimal Debian Linux image that already has
+# Python installed. "slim" means it's stripped of anything not needed
+# to run Python, keeping the image smaller.
+FROM python:3.14-slim
+
+# All following commands run from /app inside the container. This is
+# just a working directory -- it doesn't exist on your Mac, it's a
+# path inside the container's own isolated filesystem.
+WORKDIR /app
+
+# XGBoost needs the OpenMP runtime to run its multi-threaded trees.
+# On your Mac that's `brew install libomp`; libgomp1 is the equivalent
+# package for Debian/Ubuntu Linux (which is what this base image is).
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy just requirements.txt first (not the whole project) and install
+# from it before copying our actual code. Docker caches each step: as
+# long as requirements.txt hasn't changed, Docker reuses the cached
+# "pip install" step instead of re-downloading everything, so editing
+# api.py later won't force a slow reinstall of every package.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Now copy everything else (api.py, database.py, explainability.py,
+# credit_pipeline.py, the trained .joblib models, metrics.json, and
+# german.data-numeric -- explainability.py needs that last one to
+# rebuild its SHAP background sample). .dockerignore keeps venv/, git
+# history, etc. out of this.
+COPY . .
+
+# Documents which port the app listens on. This doesn't actually
+# publish the port to your Mac -- that's done by docker-compose.yml's
+# "ports:" setting, or `docker run -p`.
+EXPOSE 8000
+
+# The command that runs when a container starts. --host 0.0.0.0 (not
+# 127.0.0.1) is required in Docker: 127.0.0.1 would only accept
+# connections from inside the container itself, but we need the
+# dashboard container (and your Mac's browser) to reach it too.
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]

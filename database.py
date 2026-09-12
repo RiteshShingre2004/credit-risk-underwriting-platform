@@ -21,11 +21,16 @@ need to query inside it the way we'd query a feature value.
 """
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-DB_PATH = "credit_risk.db"
+# Locally this just writes credit_risk.db next to the code, same as
+# before. In Docker (Phase 5), docker-compose.yml sets CREDIT_RISK_DB_PATH
+# to a path inside a mounted volume, so the audit trail survives
+# container restarts/rebuilds instead of vanishing with the container.
+DB_PATH = os.environ.get("CREDIT_RISK_DB_PATH", "credit_risk.db")
 
 FEATURE_NAMES = [f"X{i}" for i in range(1, 25)]
 
@@ -51,6 +56,9 @@ CREATE TABLE IF NOT EXISTS scoring_log (
 
 @contextmanager
 def get_connection():
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     try:
         yield conn

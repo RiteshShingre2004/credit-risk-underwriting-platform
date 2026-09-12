@@ -1,0 +1,50 @@
+# CREDIT RISK PIPELINE - PHASE 5: WIRE THE SERVICES TOGETHER
+# ======================================================================
+# docker-compose lets us describe "these containers should run
+# together, on the same private network, with these settings" in one
+# file, instead of typing out long `docker run` commands by hand.
+# Run with: docker compose up --build
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      # host_port:container_port -- lets you hit http://localhost:8000
+      # from your Mac's browser/curl, forwarded into the container.
+      - "8000:8000"
+    volumes:
+      # Named volume: Docker manages a persistent storage area outside
+      # any single container. Without this, credit_risk.db would live
+      # only inside the container's filesystem and vanish the moment
+      # you `docker compose down` or rebuild the image -- the audit
+      # trail needs to outlive the container.
+      - credit_risk_data:/app/data
+    environment:
+      # Tells database.py (see its DB_PATH line) to write the SQLite
+      # file into that mounted volume instead of the container's
+      # throwaway filesystem.
+      - CREDIT_RISK_DB_PATH=/app/data/credit_risk.db
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      # Inside Docker's private network, containers reach each other
+      # by service name (the "api" key above), not by localhost --
+      # each container has its own localhost, separate from the others.
+      - API_URL=http://api:8000
+    depends_on:
+      # Starts the api container before the dashboard container. Note
+      # this only waits for the api container process to start, not
+      # for FastAPI to finish loading the models -- the dashboard
+      # already handles a slow/unreachable API gracefully (see its
+      # "Could not reach the API" error message), so this is fine.
+      - api
+
+volumes:
+  credit_risk_data:

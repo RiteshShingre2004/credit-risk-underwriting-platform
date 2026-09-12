@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 4 complete (persistence + audit trail)
+## Status: Phase 5 complete (Docker)
 
 ## What's built so far
 
@@ -182,9 +182,46 @@ Verified with curl (checked `/decide` writes a row, `/decisions` returns
 it) and independently with the `sqlite3` CLI directly against the
 database file, plus Playwright driving the dashboard end-to-end.
 
+### Phase 5 — Docker (`Dockerfile.api`, `Dockerfile.dashboard`, `docker-compose.yml`)
+Packages the API and dashboard as containers so the whole stack runs
+identically on any machine with Docker — no manually installed Python,
+no `libomp` step, no "works on my laptop."
+
+- **`Dockerfile.api`** — Python 3.14-slim + `libgomp1` (Linux's equivalent
+  of macOS's `libomp`, which XGBoost needs) + `requirements.txt` +
+  the code and model artifacts. Runs `uvicorn --host 0.0.0.0` (required
+  in Docker — `127.0.0.1` would only accept connections from inside the
+  container itself).
+- **`Dockerfile.dashboard`** — same base image, no `libgomp1` needed since
+  the dashboard never imports XGBoost/SHAP directly, only calls the API
+  over HTTP.
+- **`docker-compose.yml`** — wires both containers onto a private network.
+  The dashboard reaches the API at `http://api:8000` (containers address
+  each other by service name, not `localhost`) via the `API_URL`
+  environment variable; locally (no Docker) it still defaults to
+  `http://127.0.0.1:8000`, unchanged.
+- **Audit trail survives restarts** — `credit_risk.db` is written to a
+  named Docker volume (`credit_risk_data`), not the container's own
+  throwaway filesystem, controlled by the `CREDIT_RISK_DB_PATH`
+  environment variable (falls back to a local file outside Docker).
+
+Run the whole stack with:
+```bash
+docker compose up --build
+```
+Then open `http://localhost:8501` (dashboard) or `http://localhost:8000/docs`
+(API). Stop with `docker compose down` (add `-v` to also delete the audit
+trail volume).
+
+**Verified:** built both images, brought the stack up, confirmed `/`,
+`/metrics`, and `/decide` all work through the containerized API; called
+`/decide` then restarted the API container and confirmed the logged
+decision was still in `/decisions` (proves the volume mount actually
+persists data, not just that the container runs); confirmed the dashboard
+container can reach the API container by its service name (`api:8000`),
+not just `localhost`.
+
 ## What's next
-- Phase 5: Docker
-- Phase 5: Docker
 - Phase 6: Drift monitoring (PSI/CSI)
 - Phase 7: LLM/RAG policy assistant (design discussion required before
   starting — the LLM must never emit the final decision, only explain and

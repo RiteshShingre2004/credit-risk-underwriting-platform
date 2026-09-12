@@ -19,6 +19,8 @@ this dashboard, in two terminals:
     source venv/bin/activate && streamlit run dashboard.py
 """
 
+import os
+
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -26,6 +28,10 @@ import streamlit as st
 
 FEATURE_NAMES = [f"X{i}" for i in range(1, 25)]
 TIER_COLORS = {"APPROVE": "green", "REVIEW": "orange", "REJECT": "red"}
+# Locally this defaults to localhost, same as before. In Docker
+# (Phase 5), docker-compose.yml sets API_URL to "http://api:8000" --
+# containers reach each other by service name, not localhost.
+DEFAULT_API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Credit Risk Dashboard", layout="wide")
 st.title("Credit Risk & Underwriting Dashboard")
@@ -35,7 +41,7 @@ st.title("Credit Risk & Underwriting Dashboard")
 # SIDEBAR
 # -----------------------------------------------------------------
 st.sidebar.header("Settings")
-api_url = st.sidebar.text_input("FastAPI base URL", value="http://127.0.0.1:8000")
+api_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_API_URL)
 st.sidebar.caption(
     "The decision policy (which model drives the decision, and the "
     "APPROVE/REJECT thresholds) is enforced server-side by /decide, "
