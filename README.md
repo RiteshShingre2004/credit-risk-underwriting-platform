@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 5 complete (Docker)
+## Status: Phase 6 complete (drift monitoring)
 
 ## What's built so far
 
@@ -221,8 +221,42 @@ persists data, not just that the container runs); confirmed the dashboard
 container can reach the API container by its service name (`api:8000`),
 not just `localhost`.
 
+### Phase 6 — Drift monitoring (`drift_monitoring.py`)
+A script that flags when a new batch of applicants looks statistically
+different from the applicants the model was trained on — using the
+**Population Stability Index (PSI)**, per feature, computed without
+needing any outcome labels (you only find out who defaulted months
+later, but you can check "do these applicants even look similar?" the
+moment they arrive).
+
+**Method:** bucket each feature into 10 deciles using *training-data*
+cutoffs (fixed reference), compare what % of the training population
+fell in each bucket vs. what % of the new batch does, and sum
+`(new% - train%) × ln(new% / train%)` across buckets. Standard
+thresholds: `<0.10` stable, `0.10–0.25` **WATCH**, `≥0.25` **INVESTIGATE**.
+
+Two functions:
+- `compute_psi(train_values, new_values)` — PSI for one feature.
+- `psi_report(new_batch)` — PSI + status for all 24 features, sorted
+  worst-first.
+
+Run the demo with:
+```bash
+source venv/bin/activate
+python3 drift_monitoring.py
+```
+It runs two checks and saves `psi_report.png` (a bar chart of the
+second one):
+1. **Real held-out test set vs. training data** — same underlying
+   population, so PSI stays ~0 everywhere (0 of 24 features flagged).
+   This is the "no false alarms" sanity check.
+2. **Synthetically drifted batch** — credit amount (`X5`) inflated 60%,
+   loan duration (`X2`) inflated 40%, to prove the alert actually fires
+   on a real shift. Result: `X2` → PSI 0.65 (INVESTIGATE), `X5` → PSI
+   0.11 (WATCH), everything else stays stable — exactly the two
+   tampered features, nothing else.
+
 ## What's next
-- Phase 6: Drift monitoring (PSI/CSI)
 - Phase 7: LLM/RAG policy assistant (design discussion required before
   starting — the LLM must never emit the final decision, only explain and
   fact-check a decision already made by the deterministic model + policy
