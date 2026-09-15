@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 6 complete (drift monitoring)
+## Status: Phase 7 core built (LLM explanation + fact-check) — API/dashboard wiring next
 
 ## What's built so far
 
@@ -256,8 +256,74 @@ second one):
    0.11 (WATCH), everything else stays stable — exactly the two
    tampered features, nothing else.
 
+### Phase 7 — LLM explanation + fact-check (`policy_docs/`, `policy_retrieval.py`, `llm_explainer.py`)
+**The hard constraint:** the LLM never decides anything. `api.py`'s
+`apply_policy()` (fixed PD thresholds) is the only thing that ever
+produces APPROVE/REVIEW/REJECT. The LLM's only job here is to explain a
+decision that's already final, and a *second, independent* LLM call
+fact-checks that explanation before it's trusted.
+
+- **`policy_docs/underwriting_policy.md`** — a synthetic underwriting
+  policy (there's no real bank policy to use for a portfolio project):
+  decision tiers matching `api.py`'s actual thresholds, which model
+  drives the decision, SHAP explanation guidance, adverse-action reason
+  categories, fair lending / prohibited factors, and an explicit section
+  addressed to the automated explanation assistant.
+- **`policy_retrieval.py`** — chunks the policy doc by section, retrieves
+  the most relevant sections for a query via TF-IDF + cosine similarity
+  (`scikit-learn`, no new heavy dependency — appropriate since the corpus
+  is one short document, not a large collection). Verified: 7 sections
+  indexed, 4 test queries each correctly retrieved their relevant section.
+- **`llm_explainer.py`** — two separate LLM calls, on purpose:
+  - `generate_explanation()` writes a plain-language explanation from
+    the decision facts + retrieved policy text.
+  - `verify_explanation()` is a **second, independent** call that
+    re-checks the draft against only the same facts and policy text,
+    and reports any unsupported claim. It never sees the first call's
+    reasoning, only its output.
+  - If verification fails, `explain_decision()` regenerates once with
+    the specific issues fed back, and always returns an honest
+    `verified` flag — a narrative that failed verification is still
+    returned, just labeled as such, never silently hidden.
+
+**Runs on Groq's free API** serving OpenAI's open-weight `gpt-oss`
+models (Apache 2.0 licensed) — `gpt-oss-120b` for generation,
+`gpt-oss-20b` for verification (a grading/checklist task doesn't need
+the biggest model, same reasoning as using a cheaper model for an LLM
+judge anywhere else). This started as a local-only plan via Ollama, but
+large model downloads (~5GB) kept failing on this network; Groq avoids
+that entirely — no local download, no GPU needed, free tier is
+rate-limited rather than metered for this volume of use. Get a free key
+at [console.groq.com/keys](https://console.groq.com/keys) and:
+```bash
+export GROQ_API_KEY=gsk_...
+source venv/bin/activate
+python3 llm_explainer.py
+```
+
+**A real bug caught and fixed during testing:** the decision JSON handed
+to the LLM originally contained two different "probability"-shaped
+fields — `xgb_probability_of_default` (the *calibrated* PD that actually
+drives the decision) and `explanation.predicted_probability` (SHAP's own
+figure, from the *raw, uncalibrated* model — see the Phase 1 caveat
+above). The LLM picked the wrong one and stated it as "the" probability
+of default (applicant #54: said 0.908, the real decision PD was 0.760) —
+and the verifier didn't catch it either, since the number technically
+did appear somewhere in the facts, just under the wrong claim. Fixed by
+building a `_decision_facts_for_prompt()` helper that exposes only one,
+unambiguous `probability_of_default` field to both LLM calls, rather
+than trying to prompt-engineer around two similarly-named numbers.
+Re-tested after the fix: both a high-risk (REJECT) and low-risk
+(APPROVE) applicant now cite the correct PD and verify as grounded on
+the first attempt.
+
+**Still to do:** wire this into `api.py` as a new endpoint (e.g.
+`POST /narrate`, taking a `log_id` from an existing `/decide` call),
+log the narrative + verification result to the audit trail, and
+surface it in the dashboard.
+
 ## What's next
-- Phase 7: LLM/RAG policy assistant (design discussion required before
-  starting — the LLM must never emit the final decision, only explain and
-  fact-check a decision already made by the deterministic model + policy
-  engine)
+- Finish Phase 7: wire `llm_explainer.py` into `api.py` + the dashboard
+- Phase 8 (not in the original plan, worth considering): a short writeup
+  / architecture diagram summarizing the whole project for a portfolio
+  audience
