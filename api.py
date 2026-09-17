@@ -246,10 +246,11 @@ def narrate(log_id: int):
 
     try:
         result = llm_explainer.explain_decision(decision)
-    except RuntimeError as e:
-        # llm_explainer raises this specifically when GROQ_API_KEY is
-        # missing -- a 503 (service temporarily unavailable) is more
-        # accurate than a generic 500 for "this feature isn't configured."
+    except llm_explainer.LLMServiceError as e:
+        # Covers a missing GROQ_API_KEY, a rate limit, or any other
+        # upstream failure reaching Groq -- one clear 503 (service
+        # temporarily unavailable) instead of each different failure
+        # mode surfacing as an unexplained 500.
         raise HTTPException(status_code=503, detail=str(e))
 
     database.save_narrative(

@@ -60,6 +60,16 @@ VERIFIER_MODEL = "openai/gpt-oss-20b"
 _retriever = PolicyRetriever()
 
 
+class LLMServiceError(Exception):
+    """
+    Raised for any problem reaching or getting a valid response from
+    Groq -- missing API key, rate limit, network error, or a bad
+    upstream response. api.py catches this ONE type and turns it into
+    a clean 503, instead of every different underlying failure mode
+    surfacing as a generic, unexplained 500.
+    """
+
+
 def _groq_chat(model, system_prompt, user_prompt, json_schema=None):
     """
     POSTs one chat request to Groq's hosted API and returns the model's
@@ -73,7 +83,7 @@ def _groq_chat(model, system_prompt, user_prompt, json_schema=None):
     """
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError(
+        raise LLMServiceError(
             "GROQ_API_KEY is not set. Get a free key at "
             "https://console.groq.com/keys and run: export GROQ_API_KEY=gsk_..."
         )
@@ -91,13 +101,25 @@ def _groq_chat(model, system_prompt, user_prompt, json_schema=None):
             "json_schema": {"name": "verification_result", "schema": json_schema},
         }
 
-    response = requests.post(
-        GROQ_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
-        timeout=60,
-    )
-    response.raise_for_status()
+    try:
+        response = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=60,
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        if response.status_code == 429:
+            retry_after = response.headers.get("retry-after", "a bit")
+            raise LLMServiceError(
+                f"Groq's free tier rate limit was hit. Wait {retry_after} "
+                "seconds and try again -- this is a usage limit, not a bug."
+            ) from e
+        raise LLMServiceError(f"Groq API returned an error: {e}") from e
+    except requests.exceptions.RequestException as e:
+        raise LLMServiceError(f"Could not reach Groq's API: {e}") from e
+
     return response.json()["choices"][0]["message"]["content"]
 
 
