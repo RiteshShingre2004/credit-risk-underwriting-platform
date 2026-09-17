@@ -354,6 +354,21 @@ PD; separately confirmed an audit entry with no narrative shows the
 button, generating one makes it disappear and the narrative appear, in
 that order.
 
+### Bonus — analytical SQL queries (`queries.sql`)
+The audit trail (`credit_risk.db`) is a real, queryable table — X1-X24
+are stored as their own typed columns specifically so questions like
+these are a plain SQL query, not application code. Run them with:
+```bash
+sqlite3 -header -column credit_risk.db < queries.sql
+```
+Includes: decision volume and mix by tier, average risk by tier (a
+sanity check that the policy thresholds actually separate risk as
+intended), decision volume over time, which logged decisions still
+need a Phase 7 narrative, the LLM fact-check pass rate, and which
+features most often show up as a top SHAP driver (via SQLite's `json_each`,
+since `shap_top_features` is stored as a JSON array). All six tested
+directly against this project's real `credit_risk.db`.
+
 ## What's next
 Nothing from the original plan — all 7 phases are built, tested, and
 wired together. Worth considering as a follow-up, not required:
