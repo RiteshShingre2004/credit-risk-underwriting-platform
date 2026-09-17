@@ -28,10 +28,19 @@ import streamlit as st
 
 FEATURE_NAMES = [f"X{i}" for i in range(1, 25)]
 TIER_COLORS = {"APPROVE": "green", "REVIEW": "orange", "REJECT": "red"}
-# Locally this defaults to localhost, same as before. In Docker
-# (Phase 5), docker-compose.yml sets API_URL to "http://api:8000" --
-# containers reach each other by service name, not localhost.
-DEFAULT_API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
+# Locally this defaults to localhost. In Docker (Phase 5),
+# docker-compose.yml sets API_URL to "http://api:8000" -- containers
+# reach each other by service name, not localhost. On a real deployed
+# server, whoever runs the container sets this once, server-side.
+#
+# This is NOT a visitor-editable setting (it used to be a sidebar text
+# box). Letting anyone typing into the app choose which API it talks
+# to means a visitor could point your dashboard at a different server
+# entirely and have it send their applicant data there -- harmless for
+# a solo local demo, but the wrong default the moment this is running
+# somewhere other people can open in a browser. So it's read once from
+# the environment and never exposed as something a visitor can change.
+api_url = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Credit Risk Dashboard", layout="wide")
 st.title("Credit Risk & Underwriting Dashboard")
@@ -40,8 +49,8 @@ st.title("Credit Risk & Underwriting Dashboard")
 # -----------------------------------------------------------------
 # SIDEBAR
 # -----------------------------------------------------------------
-st.sidebar.header("Settings")
-api_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_API_URL)
+st.sidebar.header("About")
+st.sidebar.caption(f"Connected to API at: {api_url}")
 st.sidebar.caption(
     "The decision policy (which model drives the decision, and the "
     "APPROVE/REJECT thresholds) is enforced server-side by /decide, "
