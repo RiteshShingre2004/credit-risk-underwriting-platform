@@ -26,6 +26,15 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile.api
     healthCheckPath: /
+    envVars:
+      # sync: false = a secret. Render prompts for the actual value
+      # during Blueprint creation instead of reading it from this file
+      # -- so it never ends up committed to the repo. Without this set,
+      # /narrate returns a clean 503 (see llm_explainer.py's
+      # LLMServiceError), not a crash -- but the LLM explanation
+      # feature won't work until it's set.
+      - key: GROQ_API_KEY
+        sync: false
 
   - name: credit-risk-dashboard
     type: web
