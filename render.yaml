@@ -1,0 +1,40 @@
+# RENDER BLUEPRINT - deploys both services in one step
+# ======================================================================
+# A Blueprint is Render's version of docker-compose.yml: one file that
+# describes every service to create, instead of clicking through "New
+# Web Service" twice and configuring each by hand.
+#
+# Deploy: push this repo to GitHub, then in Render -> New -> Blueprint,
+# point it at the repo. Render reads this file and creates both
+# services below automatically, each on the free plan.
+#
+# ONE MANUAL STEP AFTER FIRST DEPLOY: this file deliberately does NOT
+# try to auto-wire the dashboard's API_URL to the api service's address
+# -- Render's Blueprint spec doesn't clearly support combining a fixed
+# "https://" prefix with a cross-service reference, and guessing here
+# risks a silently broken deploy. Instead:
+#   1. Deploy this Blueprint.
+#   2. Open the credit-risk-api service in Render, copy its URL
+#      (looks like https://credit-risk-api-XXXX.onrender.com).
+#   3. Open the credit-risk-dashboard service -> Environment -> set
+#      API_URL to that URL -> save (Render redeploys it automatically).
+
+services:
+  - name: credit-risk-api
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.api
+    healthCheckPath: /
+
+  - name: credit-risk-dashboard
+    type: web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.dashboard
+    envVars:
+      # Placeholder -- see the manual step above. Render needs some
+      # value here at first deploy; you'll overwrite it with the real
+      # API URL once you know it.
+      - key: API_URL
+        value: "http://localhost:8000"
