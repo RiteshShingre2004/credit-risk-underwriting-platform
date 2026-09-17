@@ -24,10 +24,11 @@ import json
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 import database
+import llm_explainer
 from explainability import explain_applicant
 
 FEATURE_NAMES = [f"X{i}" for i in range(1, 25)]
@@ -217,3 +218,45 @@ def decisions(limit: int = 50):
     """Return the most recently logged decisions, newest first --
     the audit trail."""
     return database.get_recent_decisions(limit=limit)
+
+
+@app.post("/narrate/{log_id}")
+def narrate(log_id: int):
+    """
+    Phase 7: generates a plain-language, policy-grounded explanation
+    for an ALREADY-LOGGED decision, and fact-checks it before saving.
+    This never re-decides anything -- decision_tier and the PD that
+    drove it are read back exactly as /decide logged them and handed
+    to the LLM as fixed facts it cannot change (see llm_explainer.py's
+    hard constraint). Narratives are generated on demand rather than
+    automatically at /decide time, so scoring stays fast even when the
+    LLM step is slow or (if GROQ_API_KEY isn't set) unavailable.
+    """
+    row = database.get_decision_by_id(log_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No logged decision with id {log_id}")
+
+    decision = {
+        "decision_tier": row["decision_tier"],
+        "xgb_probability_of_default": row["xgb_pd"],
+        "policy_approve_below": row["policy_approve_below"],
+        "policy_reject_above": row["policy_reject_above"],
+        "explanation": {"top_features": json.loads(row["shap_top_features"])},
+    }
+
+    try:
+        result = llm_explainer.explain_decision(decision)
+    except RuntimeError as e:
+        # llm_explainer raises this specifically when GROQ_API_KEY is
+        # missing -- a 503 (service temporarily unavailable) is more
+        # accurate than a generic 500 for "this feature isn't configured."
+        raise HTTPException(status_code=503, detail=str(e))
+
+    database.save_narrative(
+        log_id=log_id,
+        narrative=result["narrative"],
+        verified=result["verified"],
+        issues=result["verification_issues"],
+    )
+
+    return {"log_id": log_id, **result}

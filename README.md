@@ -5,7 +5,7 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: Phase 7 core built (LLM explanation + fact-check) — API/dashboard wiring next
+## Status: All 7 planned phases complete
 
 ## What's built so far
 
@@ -317,13 +317,48 @@ Re-tested after the fix: both a high-risk (REJECT) and low-risk
 (APPROVE) applicant now cite the correct PD and verify as grounded on
 the first attempt.
 
-**Still to do:** wire this into `api.py` as a new endpoint (e.g.
-`POST /narrate`, taking a `log_id` from an existing `/decide` call),
-log the narrative + verification result to the audit trail, and
-surface it in the dashboard.
+**Wired into the API and dashboard:**
+- **`POST /narrate/{log_id}`** (`api.py`) — looks up an already-logged
+  decision by id, reconstructs only the fields the LLM is allowed to
+  see (via `_decision_facts_for_prompt()`), runs it through
+  `llm_explainer.explain_decision()`, and saves the narrative +
+  verification result back onto that row. Deliberately on-demand, not
+  automatic at `/decide` time, so scoring stays fast and doesn't
+  depend on the LLM being configured. Missing `GROQ_API_KEY` returns a
+  clean `503` with a clear message, not a generic crash.
+- **`database.py`** — added `narrative`, `narrative_verified`,
+  `narrative_issues`, `narrative_generated_at` columns via a small
+  migration in `init_db()` (`ALTER TABLE` for columns an existing
+  `credit_risk.db` doesn't have yet — this project already had real
+  logged decisions from Phases 4-6 testing, so a fresh-install-only
+  schema wasn't enough). Plus `get_decision_by_id()` and
+  `save_narrative()`.
+- **`dashboard.py`** — a "Generate plain-language explanation" button
+  on the Score tab (right after scoring an applicant), and a "Generate
+  one now" button in the Audit Trail tab's detail view for any past
+  entry that doesn't have a narrative yet. Both show a green "fact-check
+  passed" banner or an honest warning with the specific issues if it
+  didn't.
+
+**A second real bug caught, this time via actual browser testing
+(Playwright), not just curl:** the Audit Trail tab's "only show the
+generate button if there's no narrative yet" check was
+`if not selected_row.get("narrative")`. A missing SQL value comes back
+from a pandas DataFrame as float `NaN`, not `None` or `""` — and
+`bool(nan)` is `True` in Python, so the check silently never showed the
+button for real "no narrative yet" rows. Fixed with `pd.isna()`, which
+correctly handles `NaN`, `None`, and real values. Re-tested end-to-end
+with Playwright driving a real headless browser: scored an applicant,
+generated its explanation, confirmed the fact-check banner and correct
+PD; separately confirmed an audit entry with no narrative shows the
+button, generating one makes it disappear and the narrative appear, in
+that order.
 
 ## What's next
-- Finish Phase 7: wire `llm_explainer.py` into `api.py` + the dashboard
-- Phase 8 (not in the original plan, worth considering): a short writeup
-  / architecture diagram summarizing the whole project for a portfolio
+Nothing from the original plan — all 7 phases are built, tested, and
+wired together. Worth considering as a follow-up, not required:
+- A short project writeup / architecture diagram for a portfolio
   audience
+- n8n automation on top of the existing API (batch scoring, drift
+  alerts, an intake pipeline) -- discussed as a separate learning
+  project, not yet started

@@ -108,7 +108,15 @@ with tab_score:
         except requests.exceptions.HTTPError as e:
             st.error(f"API returned an error: {e}")
         else:
-            result = resp.json()
+            # Stored in session_state (not a local variable) so the
+            # "Generate plain-language explanation" button below --
+            # itself a second, separate click that reruns this whole
+            # script -- can still find this result afterward.
+            st.session_state["last_decision"] = resp.json()
+            st.session_state.pop("last_narrative", None)
+
+    if "last_decision" in st.session_state:
+            result = st.session_state["last_decision"]
             explanation = result["explanation"]
             tier = result["decision_tier"]
             color = TIER_COLORS[tier]
@@ -175,6 +183,42 @@ with tab_score:
             with text_col:
                 for line in explanation["top_features"]:
                     st.write(f"- {line}")
+
+            st.markdown("### Plain-language explanation (LLM, Phase 7)")
+            st.caption(
+                "This calls /narrate, which never re-decides anything -- it "
+                "only explains the tier and SHAP factors already fixed above. "
+                "A second, independent LLM call fact-checks the explanation "
+                "before it's shown here."
+            )
+            if st.button("Generate plain-language explanation"):
+                try:
+                    narrate_resp = requests.post(
+                        f"{api_url}/narrate/{result['log_id']}", timeout=60
+                    )
+                    narrate_resp.raise_for_status()
+                except requests.exceptions.ConnectionError:
+                    st.error("Could not reach the API.")
+                except requests.exceptions.HTTPError as e:
+                    # 503 specifically means GROQ_API_KEY isn't set server-side.
+                    st.error(f"API returned an error: {e} -- {narrate_resp.text}")
+                else:
+                    st.session_state["last_narrative"] = narrate_resp.json()
+
+            if "last_narrative" in st.session_state:
+                narrative_result = st.session_state["last_narrative"]
+                if narrative_result["verified"]:
+                    st.success("Fact-check passed -- every claim traced back to the decision facts or policy text.")
+                else:
+                    st.warning(
+                        "Fact-check did NOT fully pass. Showing it anyway, honestly "
+                        "labeled, rather than hiding a failed check: "
+                        + "; ".join(narrative_result["verification_issues"])
+                    )
+                st.write(narrative_result["narrative"])
+                st.caption(
+                    "Policy sections used: " + ", ".join(narrative_result["policy_sections_used"])
+                )
 
 # -----------------------------------------------------------------
 # TAB 2: MODEL PERFORMANCE
@@ -251,4 +295,27 @@ with tab_audit:
 
             with st.expander("Full detail for one entry"):
                 selected_id = st.selectbox("Entry id", audit_df["id"].tolist())
-                st.json(audit_df[audit_df["id"] == selected_id].iloc[0].to_dict())
+                selected_row = audit_df[audit_df["id"] == selected_id].iloc[0].to_dict()
+                st.json(selected_row)
+
+                # A missing narrative comes back from pandas as float
+                # NaN, not None or "" -- and bool(nan) is True in Python,
+                # so a plain truthiness check here would silently never
+                # show this button. pd.isna() handles NaN, None, and a
+                # real empty value all correctly.
+                if pd.isna(selected_row.get("narrative")):
+                    st.caption("No plain-language explanation generated yet for this entry.")
+                    if st.button("Generate one now", key=f"narrate_{selected_id}"):
+                        try:
+                            narrate_resp = requests.post(
+                                f"{api_url}/narrate/{selected_id}", timeout=60
+                            )
+                            narrate_resp.raise_for_status()
+                        except requests.exceptions.ConnectionError:
+                            st.error("Could not reach the API.")
+                        except requests.exceptions.HTTPError as e:
+                            st.error(f"API returned an error: {e} -- {narrate_resp.text}")
+                        else:
+                            # Re-run so the re-fetched /decisions data (above)
+                            # picks up the narrative we just saved.
+                            st.rerun()

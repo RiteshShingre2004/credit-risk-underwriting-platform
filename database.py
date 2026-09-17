@@ -49,9 +49,26 @@ CREATE TABLE IF NOT EXISTS scoring_log (
     decision_tier TEXT NOT NULL,
     policy_approve_below REAL NOT NULL,
     policy_reject_above REAL NOT NULL,
-    shap_top_features TEXT NOT NULL
+    shap_top_features TEXT NOT NULL,
+    narrative TEXT,
+    narrative_verified INTEGER,
+    narrative_issues TEXT,
+    narrative_generated_at TEXT
 );
 """
+
+# Phase 7 added the four narrative_* columns after some real
+# credit_risk.db files already existed from earlier testing (Phases
+# 4-6). CREATE_TABLE_SQL above only runs for a brand-new file, so
+# existing databases need these columns added on top -- this is a
+# minimal migration, not a full migration framework, appropriate for
+# a single additive change to a SQLite prototype.
+_NARRATIVE_COLUMNS = {
+    "narrative": "TEXT",
+    "narrative_verified": "INTEGER",
+    "narrative_issues": "TEXT",
+    "narrative_generated_at": "TEXT",
+}
 
 
 @contextmanager
@@ -67,11 +84,18 @@ def get_connection():
 
 
 def init_db():
-    """Create the scoring_log table if it doesn't exist yet. Safe to
-    call every time the API starts up -- it's a no-op if the table is
-    already there."""
+    """Create the scoring_log table if it doesn't exist yet, and add
+    any columns a newer version of this file expects that an older
+    database file doesn't have. Safe to call every time the API starts
+    up -- both steps are no-ops once the schema is already current."""
     with get_connection() as conn:
         conn.execute(CREATE_TABLE_SQL)
+        existing_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(scoring_log)")
+        }
+        for name, sql_type in _NARRATIVE_COLUMNS.items():
+            if name not in existing_columns:
+                conn.execute(f"ALTER TABLE scoring_log ADD COLUMN {name} {sql_type}")
         conn.commit()
 
 
@@ -135,3 +159,40 @@ def get_recent_decisions(limit: int = 50) -> list[dict]:
             "SELECT * FROM scoring_log ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def get_decision_by_id(log_id: int) -> dict | None:
+    """Return one logged decision by its id, or None if it doesn't
+    exist -- used by /narrate to look up the decision it's explaining."""
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM scoring_log WHERE id = ?", (log_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_narrative(log_id: int, narrative: str, verified: bool, issues: list) -> None:
+    """Attach an LLM-generated explanation (Phase 7) to an existing
+    logged decision. Separate from log_decision() because the
+    narrative is generated on demand, after the decision itself is
+    already recorded -- not every logged decision needs one."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE scoring_log
+            SET narrative = ?,
+                narrative_verified = ?,
+                narrative_issues = ?,
+                narrative_generated_at = ?
+            WHERE id = ?
+            """,
+            (
+                narrative,
+                int(verified),
+                json.dumps(issues),
+                datetime.now(timezone.utc).isoformat(),
+                log_id,
+            ),
+        )
+        conn.commit()
