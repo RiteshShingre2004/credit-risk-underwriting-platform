@@ -82,3 +82,64 @@ SELECT
 FROM scoring_log, json_each(scoring_log.shap_top_features) AS feature
 GROUP BY feature_name
 ORDER BY times_in_top_5 DESC;
+
+
+-- 7. RANK EACH DECISION'S RISK WITHIN ITS OWN TIER (window function)
+-- "Within the REJECT bucket, which applicant was riskiest?" -- RANK()
+-- answers this per group in one pass, instead of a separate query per
+-- tier or pulling all the rows into application code to sort there.
+SELECT
+    id,
+    decision_tier,
+    ROUND(xgb_pd, 4) AS xgb_pd,
+    RANK() OVER (PARTITION BY decision_tier ORDER BY xgb_pd DESC) AS risk_rank_in_tier
+FROM scoring_log
+ORDER BY decision_tier, risk_rank_in_tier;
+
+
+-- 8. RUNNING TOTAL OF DECISIONS OVER TIME (window frame)
+-- The basis for a cumulative-volume line chart -- "how many applicants
+-- had we scored by this point in time?" -- without a self-join or a
+-- correlated subquery to compute the running count.
+SELECT
+    id,
+    created_at,
+    decision_tier,
+    COUNT(*) OVER (ORDER BY id) AS cumulative_decisions
+FROM scoring_log
+ORDER BY id;
+
+
+-- 9. RISK CHANGE VS. THE PREVIOUS DECISION (LAG window function)
+-- "Did risk jump sharply between consecutive applicants?" -- LAG()
+-- looks at the previous row without a self-join, which is the
+-- textbook use case for it.
+SELECT
+    id,
+    ROUND(xgb_pd, 4) AS xgb_pd,
+    ROUND(xgb_pd - LAG(xgb_pd) OVER (ORDER BY id), 4) AS change_from_previous
+FROM scoring_log
+ORDER BY id;
+
+
+-- 10. DECISIONS RISKIER THAN THEIR OWN TIER'S AVERAGE (CTE + JOIN)
+-- A CTE (the WITH clause) computes each tier's average PD once, named
+-- and reusable, instead of repeating that subquery inline. Joining it
+-- back against the base table on decision_tier is a real JOIN -- just
+-- against a computed result set instead of a second physical table,
+-- which is the common, honest way to demonstrate JOIN syntax when the
+-- underlying schema is (deliberately) a single table.
+WITH tier_averages AS (
+    SELECT decision_tier, AVG(xgb_pd) AS avg_pd_in_tier
+    FROM scoring_log
+    GROUP BY decision_tier
+)
+SELECT
+    s.id,
+    s.decision_tier,
+    ROUND(s.xgb_pd, 4) AS xgb_pd,
+    ROUND(t.avg_pd_in_tier, 4) AS tier_avg_pd
+FROM scoring_log AS s
+JOIN tier_averages AS t ON s.decision_tier = t.decision_tier
+WHERE s.xgb_pd > t.avg_pd_in_tier
+ORDER BY s.decision_tier, s.xgb_pd DESC;
