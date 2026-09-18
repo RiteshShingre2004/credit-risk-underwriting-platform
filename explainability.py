@@ -65,9 +65,23 @@ explainer = shap.TreeExplainer(
     feature_perturbation="interventional",
 )
 
-# Pre-compute SHAP values for the whole test set once, so both
-# functions below can reuse them without recomputing.
-_shap_values_test = explainer.shap_values(X_test)
+# SHAP values for the whole test set, computed LAZILY (on first actual
+# use) rather than eagerly at import time. Only the standalone demo
+# below and plot_global_importance() ever need this -- the deployed
+# API always calls explain_applicant() with a brand-new applicant's
+# dict, never a test-set index, so it never touches this at all. Eagerly
+# computing it on every import wasted real memory and startup time on
+# every single API container start/restart for something the live API
+# path never uses -- worth avoiding on a memory-constrained deployment
+# (e.g. a free-tier cloud instance).
+_shap_values_test_cache = None
+
+
+def _get_shap_values_test():
+    global _shap_values_test_cache
+    if _shap_values_test_cache is None:
+        _shap_values_test_cache = explainer.shap_values(X_test)
+    return _shap_values_test_cache
 
 
 # -----------------------------------------------------------------
@@ -89,7 +103,7 @@ def explain_applicant(row, top_n=5):
     """
     if isinstance(row, (int, np.integer)):
         features = X_test.iloc[[row]]
-        shap_row = _shap_values_test[row]
+        shap_row = _get_shap_values_test()[row]
     else:
         features = pd.DataFrame([row])[X.columns]
         shap_row = explainer.shap_values(features)[0]
@@ -131,7 +145,7 @@ def plot_global_importance(save_path="shap_global_importance.png"):
     overall?"
     """
     shap.summary_plot(
-        _shap_values_test, X_test, plot_type="bar", show=False
+        _get_shap_values_test(), X_test, plot_type="bar", show=False
     )
     plt.title("Global Feature Importance (mean |SHAP value|, XGBoost)")
     plt.tight_layout()
