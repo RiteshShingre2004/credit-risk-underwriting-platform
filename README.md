@@ -5,7 +5,24 @@ project. Predicts Probability of Default (PD) on the UCI German Credit
 dataset, calibrates the predictions, explains individual decisions, and
 (eventually) serves them through an API + dashboard with an audit trail.
 
-## Status: All 7 planned phases complete
+## Status: All 7 planned phases complete, deployed live
+
+**Live demo:** https://credit-risk-dashboard-hvs8.onrender.com
+**API:** https://credit-risk-api-2ad1.onrender.com (see `/docs` for interactive API docs)
+
+Deployed on [Render](https://render.com)'s free tier via the `render.yaml`
+Blueprint in this repo (both services, no manual per-service setup).
+
+**Known limitation, by choice:** the free tier gives each service no
+persistent disk, so `credit_risk.db` (the audit trail) resets on any
+container restart or redeploy — a crash, a new deploy, or Render's own
+maintenance all wipe it. The correct production fix is an external
+database (e.g. a free Neon/Supabase Postgres) that lives independently
+of the API container's lifecycle; deliberately not doing that here to
+keep the free deployment simple, since this is a portfolio demo, not a
+system anyone's real audit trail depends on. If persistence mattered
+here, that's the next thing to build, not a limitation to work around
+in place.
 
 ## What's built so far
 
